@@ -2,10 +2,7 @@ package main
 
 import (
 	"fmt"
-	"io"
-	"log"
 	"net"
-	"os"
 )
 
 func main() {
@@ -13,32 +10,29 @@ func main() {
 
 	// Create a new server
 	l, err := net.Listen("tcp", ":6379")
-
 	if err != nil {
-		log.Fatal("unable to start server: ", err)
+		fmt.Println(err)
 		return
 	}
 
+	// Listen for connections
 	conn, err := l.Accept()
 	if err != nil {
-		log.Fatal(err)
+		fmt.Println(err)
 		return
 	}
 
 	defer conn.Close()
 
 	for {
-		buf := make([]byte, 1024)
-
-		// read message from client
-		_, err = conn.Read(buf)
+		resp := NewResp(conn)
+		value, err := resp.Read()
 		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			log.Fatal("error reading from client: ", err.Error())
-			os.Exit(1)
+			fmt.Println(err)
+			return
 		}
+
+		fmt.Println(value)
 
 		// ignore request and send back a PONG
 		conn.Write([]byte("+OK\r\n"))

@@ -34,7 +34,7 @@ func main() {
 
 		fmt.Println(value)
 
-		// ignore request and send back a PONG
-		conn.Write([]byte("+OK\r\n"))
+		writer := NewWriter(conn)
+		writer.Write(Value{typ: "string", str: "OK"})
 	}
 }

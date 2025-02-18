@@ -1,11 +1,20 @@
 package main
 
-import "sync"
+import (
+	"strconv"
+	"sync"
+	"time"
+)
 
-var keyStringValueMap = map[string]string{}
+type Node struct {
+	value string
+	ttl   time.Time
+}
+
+var keyStringValueMap = map[string]Node{}
 var ksvRWMutex = sync.RWMutex{}
 
-var keyStringMapValueMap = map[string]map[string]string{}
+var keyStringMapValueMap = map[string]map[string]Node{}
 var ksmvRWMutex = sync.RWMutex{}
 
 var Handlers = map[string]func([]Value) Value{
@@ -15,6 +24,8 @@ var Handlers = map[string]func([]Value) Value{
 	"HSET":    hashSet,
 	"HGET":    hashGet,
 	"HGETALL": hashGetAll,
+	"EXPIRE":  expire,
+	"TTL":     getTimeToLive,
 }
 
 func ping(args []Value) Value {
@@ -33,14 +44,14 @@ func get(args []Value) Value {
 	key := args[0].bulk
 
 	ksvRWMutex.RLock()
-	value, ok := keyStringValueMap[key]
+	node, ok := keyStringValueMap[key]
 	ksvRWMutex.RUnlock()
 
-	if !ok {
+	if !ok || (!node.ttl.IsZero() && time.Now().After(node.ttl)) {
 		return Value{typ: "null"}
 	}
 
-	return Value{typ: "bulk", bulk: value}
+	return Value{typ: "bulk", bulk: node.value}
 }
 
 func set(args []Value) Value {
@@ -49,10 +60,10 @@ func set(args []Value) Value {
 	}
 
 	key := args[0].bulk
-	value := args[1].bulk
+	val := args[1].bulk
 
 	ksvRWMutex.Lock()
-	keyStringValueMap[key] = value
+	keyStringValueMap[key] = Node{value: val}
 	ksvRWMutex.Unlock()
 
 	return Value{typ: "string", str: "OK"}
@@ -67,14 +78,14 @@ func hashGet(args []Value) Value {
 	key2 := args[1].bulk
 
 	ksmvRWMutex.RLock()
-	value, ok := keyStringMapValueMap[key1][key2]
+	node, ok := keyStringMapValueMap[key1][key2]
 	ksmvRWMutex.RUnlock()
 
 	if !ok {
 		return Value{typ: "null"}
 	}
 
-	return Value{typ: "bulk", bulk: value}
+	return Value{typ: "bulk", bulk: node.value}
 }
 
 func hashSet(args []Value) Value {
@@ -84,15 +95,15 @@ func hashSet(args []Value) Value {
 
 	key1 := args[0].bulk
 	key2 := args[1].bulk
-	value := args[2].bulk
+	val := args[2].bulk
 
 	ksmvRWMutex.Lock()
 
 	if _, ok := keyStringMapValueMap[key1]; !ok {
-		keyStringMapValueMap[key1] = map[string]string{}
+		keyStringMapValueMap[key1] = map[string]Node{}
 	}
 
-	keyStringMapValueMap[key1][key2] = value
+	keyStringMapValueMap[key1][key2] = Node{value: val}
 
 	ksmvRWMutex.Unlock()
 
@@ -107,7 +118,7 @@ func hashGetAll(args []Value) Value {
 	key1 := args[0].bulk
 
 	ksmvRWMutex.RLock()
-	valueMap, ok := keyStringMapValueMap[key1]
+	nodeMap, ok := keyStringMapValueMap[key1]
 	ksmvRWMutex.RUnlock()
 
 	if !ok {
@@ -116,9 +127,49 @@ func hashGetAll(args []Value) Value {
 
 	valueArray := []Value{}
 
-	for key2, value := range valueMap {
-		valueArray = append(valueArray, Value{typ: "bulk", bulk: key2}, Value{typ: "bulk", bulk: value})
+	for key2, node := range nodeMap {
+		valueArray = append(valueArray, Value{typ: "bulk", bulk: key2}, Value{typ: "bulk", bulk: node.value})
 	}
 
 	return Value{typ: "array", array: valueArray}
+}
+
+func expire(args []Value) Value {
+	if len(args) != 2 {
+		return Value{typ: "error", str: "ERR wrong number of arguments for 'expire' command"}
+	}
+
+	key := args[0].bulk
+	seconds := args[1].num
+
+	ksvRWMutex.Lock()
+	ttl := time.Now().Add(time.Duration(seconds) * time.Second)
+	keyStringValueMap[key] = Node{value: keyStringValueMap[key].value, ttl: ttl}
+	ksvRWMutex.Unlock()
+
+	return Value{typ: "string", str: "OK"}
+}
+
+func getTimeToLive(args []Value) Value {
+	if len(args) != 1 {
+		return Value{typ: "error", str: "ERR wrong number of arguments for 'ttl' command"}
+	}
+
+	key := args[0].bulk
+
+	ksvRWMutex.RLock()
+	node, ok := keyStringValueMap[key]
+	ksvRWMutex.RUnlock()
+
+	if !ok || node.ttl.IsZero() {
+		return Value{typ: "null"}
+	}
+
+	timeToLive := int(time.Since(node.ttl))
+
+	if timeToLive < 0 {
+		return Value{typ: "null"}
+	}
+
+	return Value{typ: "string", str: strconv.Itoa(timeToLive)}
 }
